@@ -1,24 +1,24 @@
 import asyncio
 from aio_pika import connect_robust, Message
-import json
 
 async def main():
-    # Connessione al broker RabbitMQ sul giusto host/porta:
-    conn = await connect_robust("amqp://guest:guest@localhost:5673/")
-    chan = await conn.channel()
-    msg = {
-        "id": 1,
-        "user_id": 2,
-        "title": "test",
-        "description": "test",
-        "category_id": 1,
-        "price": "100"
-    }
-    await chan.default_exchange.publish(
-        Message(body=json.dumps(msg).encode()),
-        routing_key="user.mailing"
+    conn = await connect_robust("amqp://guest:guest@template_rabbitmq:5672/")
+    channel = await conn.channel()
+
+    # Notifica utente (service1)
+    await channel.default_exchange.publish(
+        Message(body=b'{"id": 1, "user_id": 2, "description": "notify-user"}'),
+        routing_key="notify_key"
     )
-    print("[send_test_event] Sent test message")
+
+    # Ordine checkout (service2)
+    await channel.default_exchange.publish(
+        Message(body=b'{"id": 99, "user_id": 5, "description": "order-checkout"}'),
+        routing_key="order_key"
+    )
+
+    print("Messaggi inviati.")
     await conn.close()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

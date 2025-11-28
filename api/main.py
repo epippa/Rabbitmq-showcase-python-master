@@ -24,7 +24,7 @@ trace.set_tracer_provider(
     TracerProvider(resource=Resource.create({SERVICE_NAME: "api"}))
 )
 trace.get_tracer_provider().add_span_processor(
-    BatchSpanProcessor(JaegerExporter(agent_host_name="jaeger", agent_port=6831))
+    BatchSpanProcessor(JaegerExporter(agent_host_name="template_jaeger", agent_port=6831))
 )
 tracer = trace.get_tracer(__name__)
 
