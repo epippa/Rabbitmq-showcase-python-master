@@ -10,8 +10,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
-      - RABBITMQ_PORT=5673
+      - RABBITMQ_HOST=rabbitmq        # Usa il nome del servizio RabbitMQ sulla rete Docker
+      - RABBITMQ_PORT=5672            # Porta interna predefinita di RabbitMQ
     networks:
       - app-network
 

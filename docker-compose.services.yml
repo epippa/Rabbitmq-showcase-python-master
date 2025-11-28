@@ -7,8 +7,8 @@ services:
     volumes:
       - ./service1:/service1
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
-      - RABBITMQ_PORT=5673
+      - RABBITMQ_HOST=rabbitmq       # Usa il nome corretto dell'host RabbitMQ
+      - RABBITMQ_PORT=5672           # Porta interna RabbitMQ
     networks:
       - app-network
 
@@ -19,7 +19,8 @@ services:
     volumes:
       - ./service2:/service2
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_HOST=rabbitmq       # Usa il nome corretto dell'host RabbitMQ
+      - RABBITMQ_PORT=5672           # Porta interna RabbitMQ (aggiunto per coerenza)
     networks:
       - app-network
 
