@@ -6,9 +6,10 @@ services:
       context: ./service1
     volumes:
       - ./service1:/service1
+    restart: always
     environment:
-      - RABBITMQ_HOST=rabbitmq       # Usa il nome corretto dell'host RabbitMQ
-      - RABBITMQ_PORT=5672           # Porta interna RabbitMQ
+      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_PORT=5672
     networks:
       - app-network
 
@@ -18,9 +19,10 @@ services:
       context: ./service2
     volumes:
       - ./service2:/service2
+    restart: always
     environment:
-      - RABBITMQ_HOST=rabbitmq       # Usa il nome corretto dell'host RabbitMQ
-      - RABBITMQ_PORT=5672           # Porta interna RabbitMQ (aggiunto per coerenza)
+      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_PORT=5672
     networks:
       - app-network
 

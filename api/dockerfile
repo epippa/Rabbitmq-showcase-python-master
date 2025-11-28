@@ -4,6 +4,8 @@ WORKDIR /api
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install opentelemetry-sdk opentelemetry-exporter-jaeger thrift aio_pika
+RUN pip install opentelemetry-instrumentation opentelemetry-api
 
 COPY . .
 
