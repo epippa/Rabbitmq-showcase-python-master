@@ -4,6 +4,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.trace import SpanContext, NonRecordingSpan, set_span_in_context, SpanKind, TraceFlags, TraceState
+from opentelemetry.instrumentation.pika import PikaInstrumentor
 
 import os
 import asyncio
@@ -18,13 +19,15 @@ from logic import change_balance  # import the business logic for service2
 
 print("[DEBUG] service2 main.py is running")
 
+service_name = "service2"
 # Tracing setup
 trace.set_tracer_provider(
-    TracerProvider(resource=Resource.create({SERVICE_NAME: "service2"}))
+    TracerProvider(resource=Resource.create({SERVICE_NAME: service_name}))
 )
 jaeger_exporter = JaegerExporter(agent_host_name="template_jaeger", agent_port=6831)
 trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(jaeger_exporter))
 tracer = trace.get_tracer(__name__)
+PikaInstrumentor().instrument()
 
 settings = Settings()
 # RabbitMQ connection parameters from env

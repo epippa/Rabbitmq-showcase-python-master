@@ -5,6 +5,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.instrumentation.pika import PikaInstrumentor
 
 from functools import lru_cache
 from typing import Annotated
@@ -14,16 +15,18 @@ from broker import a_publish_to_rabbitmq, publish_to_rabbitmq
 from config import Settings
 from fastapi import Depends, FastAPI
 
+service_name = "api"
 # Setup tracing BEFORE app is created
 trace.set_tracer_provider(
-    TracerProvider(resource=Resource.create({SERVICE_NAME: "api-service"}))
+    TracerProvider(resource=Resource.create({SERVICE_NAME: service_name}))
 )
 jaeger_exporter = JaegerExporter(agent_host_name="template_jaeger", agent_port=6831)
 trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(jaeger_exporter))
+PikaInstrumentor().instrument()
 
 # Create the FastAPI app
 description = """
-Microservice boilerplate 🚀
+Microservice boilerplate
 
 ## Usage
 - Pass foo data to any of API's endpoints (You can use foo data from down below)

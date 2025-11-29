@@ -4,34 +4,44 @@ import os
 import aio_pika
 import pika
 from opentelemetry import trace
+from opentelemetry.propagate import TraceContextTextMapPropagator
+from config import Settings
 
 # Load RabbitMQ connection parameters from environment (with defaults)
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "template_rabbitmq")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
 
+settings = Settings()
 
-def publish_to_rabbitmq(queue_name: str, exchanger: str, routing_key: str, data: dict) -> None:
-    # Get current trace context
-    current_span = trace.get_current_span()
-    ctx = current_span.get_span_context()
-    trace_id_hex = format(ctx.trace_id, '032x')
-    span_id_hex = format(ctx.span_id, '016x')
-    headers = {'trace_id': trace_id_hex, 'span_id': span_id_hex}
+def publish_to_rabbitmq(queue_name: str, exchanger: str, routing_key: str, data: dict):
+    # Inietta il contesto di tracing negli header (standard 'traceparent')
+    headers = {}
+    TraceContextTextMapPropagator().inject(headers)
 
-    # Connect to RabbitMQ and publish message with trace headers
-    params = pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT,
-                                       credentials=pika.PlainCredentials("guest", "guest"))
+    # Connessione a RabbitMQ
+    params = pika.ConnectionParameters(
+        host=settings.rabbitmq_host,
+        port=settings.rabbitmq_port,
+        credentials=pika.PlainCredentials("guest", "guest")
+    )
     connection = pika.BlockingConnection(params)
     channel = connection.channel()
-    channel.queue_bind(queue_name, exchanger, routing_key)
+
+    # Assicurati che la coda sia bindata
+    channel.queue_bind(queue=queue_name, exchange=exchanger, routing_key=routing_key)
+
+    # Pubblica il messaggio con headers di tracing
+    properties = pika.BasicProperties(
+        headers=headers,
+        content_type="application/json"
+    )
     channel.basic_publish(
         exchange=exchanger,
         routing_key=routing_key,
         body=json.dumps(data).encode(),
-        properties=pika.BasicProperties(headers=headers)
+        properties=properties
     )
     connection.close()
-
 
 async def a_publish_to_rabbitmq(queue_name: str, exchanger: str, routing_key: str, data: dict) -> None:
     # Get current trace context

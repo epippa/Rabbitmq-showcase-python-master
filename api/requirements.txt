@@ -18,4 +18,5 @@ opentelemetry-exporter-jaeger==1.21.0
 opentelemetry-instrumentation==0.45b0
 opentelemetry-instrumentation-fastapi==0.45b0
 opentelemetry-instrumentation-requests==0.45b0
+opentelemetry-instrumentation-pika
 requests==2.31.0
