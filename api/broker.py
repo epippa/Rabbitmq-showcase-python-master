@@ -4,7 +4,7 @@ import os
 import aio_pika
 import pika
 from opentelemetry import trace
-from opentelemetry.propagate import TraceContextTextMapPropagator
+from opentelemetry.propagate import inject
 from config import Settings
 
 # Load RabbitMQ connection parameters from environment (with defaults)
@@ -16,7 +16,7 @@ settings = Settings()
 def publish_to_rabbitmq(queue_name: str, exchanger: str, routing_key: str, data: dict):
     # Inietta il contesto di tracing negli header (standard 'traceparent')
     headers = {}
-    TraceContextTextMapPropagator().inject(headers)
+    inject(headers)
 
     # Connessione a RabbitMQ
     params = pika.ConnectionParameters(
