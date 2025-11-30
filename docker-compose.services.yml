@@ -1,27 +1,25 @@
 version: "3.9"
 services:
   service1:
-    container_name: template_service1
+    container_name: service1
     build:
       context: ./service1
     volumes:
       - ./service1:/service1
-    restart: always
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
     networks:
       - app-network
 
   service2:
-    container_name: template_service2
+    container_name: service2
     build:
       context: ./service2
     volumes:
       - ./service2:/service2
-    restart: always
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
     networks:
       - app-network

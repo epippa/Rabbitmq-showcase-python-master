@@ -1,17 +1,16 @@
 version: "3.9"
 services:
   api:
-    container_name: template_api
+    container_name: api
     build:
       context: ./api
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./api:/api
     ports:
       - "8000:8000"
-    restart: always
     environment:
-      - RABBITMQ_HOST=template_rabbitmq
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
     networks:
       - app-network

@@ -3,94 +3,76 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.trace import SpanContext, NonRecordingSpan, set_span_in_context, SpanKind, TraceFlags, TraceState
-from opentelemetry.instrumentation.pika import PikaInstrumentor
+from opentelemetry.propagate import set_global_textmap
+from opentelemetry.trace import SpanKind
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-import os
 import asyncio
 import aio_pika
 from aio_pika import ExchangeType
 from aio_pika.exceptions import AMQPConnectionError
 from aio_pika.abc import AbstractIncomingMessage
-
 import json
+
 from config import Settings
 
-print("[DEBUG] service1 main.py is running")
-
-service_name = "service1"
-
-# Tracing setup
+# Tracing setup for service1
 trace.set_tracer_provider(
-    TracerProvider(resource=Resource.create({SERVICE_NAME: "service_name"}))
+    TracerProvider(
+        resource=Resource.create({SERVICE_NAME: "service1"})
+    )
 )
-jaeger_exporter = JaegerExporter(agent_host_name="template_jaeger", agent_port=6831)
-trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(jaeger_exporter))
-tracer = trace.get_tracer(__name__)  # tracer for this service
-PikaInstrumentor().instrument()
+jaeger_exporter = JaegerExporter(
+    agent_host_name="jaeger",
+    agent_port=6831,
+)
+trace.get_tracer_provider().add_span_processor(
+    BatchSpanProcessor(jaeger_exporter)
+)
+# Use W3C Trace Context propagator globally
+set_global_textmap(TraceContextTextMapPropagator())
+# Get a tracer for creating spans in this service
+tracer = trace.get_tracer(__name__)
 
 settings = Settings()
-# RabbitMQ connection parameters from env
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "template_rabbitmq")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
-
 
 async def publish_to_queue(message: AbstractIncomingMessage):
-    # Process the incoming message and create a tracing span
-    async with message.process():
-        data = json.loads(message.body.decode())
-        headers = message.headers or {}
-        # Recreate parent span context if trace headers are present
-        if 'trace_id' in headers and 'span_id' in headers:
-            trace_id = int(headers['trace_id'], 16)
-            span_id = int(headers['span_id'], 16)
-            parent_context = SpanContext(trace_id=trace_id, span_id=span_id, is_remote=True, trace_flags=TraceFlags(1))
-            parent_span = NonRecordingSpan(parent_context)
-            ctx = set_span_in_context(parent_span)
-        else:
-            ctx = None
-
-        # Start a new span for processing this message
-        if ctx:
-            with tracer.start_as_current_span("RECEIVE service1", context=ctx, kind=SpanKind.SERVER):
-                print(f"[service1] Received message: {data}")
-                # (Processing logic for service1 would go here)
-        else:
-            with tracer.start_as_current_span("RECEIVE service1", kind=SpanKind.SERVER):
-                print(f"[service1] Received message: {data}")
-                # (Processing logic for service1 would go here)
-
+    """Process a single incoming RabbitMQ message (with tracing)."""
+    async with message.process():  # auto-acknowledge after processing
+        # Extract tracing headers from the message and continue the trace
+        headers = getattr(message, "headers", {}) or {}
+        context = TraceContextTextMapPropagator().extract(headers)
+        # Start a consumer span for this message processing
+        with tracer.start_as_current_span("process message", context=context, kind=SpanKind.CONSUMER) as span:
+            span.set_attribute("messaging.system", "rabbitmq")
+            span.set_attribute("messaging.destination", settings.queue_name_to_first_service)
+            span.set_attribute("messaging.rabbitmq.routing_key", message.routing_key)
+            data = json.loads(message.body.decode())
+            print(f"[service1] Received message: {data}")
 
 async def start():
-    print("[DEBUG] service1 start() entered")
+    print("[service1] Waiting for messages... (connecting to RabbitMQ)")
     while True:
         try:
-            print("[DEBUG] Connecting to RabbitMQ...")
-            connection = await aio_pika.connect_robust(host=RABBITMQ_HOST, port=RABBITMQ_PORT, login="guest", password="guest")
-            print("[DEBUG] RabbitMQ connection established")
-
+            # Connect to RabbitMQ (uses environment variables for host)
+            connection = await aio_pika.connect_robust(
+                f"amqp://guest:guest@{settings.rabbitmq_host}:{settings.rabbitmq_port}/"
+            )
             channel = await connection.channel()
-            exchange = await channel.declare_exchange(settings.exchanger, ExchangeType.DIRECT, durable=True)
-            print(f"[DEBUG] Exchange declared: {exchange.name}")
-
+            # Declare exchange and queue (idempotent) and bind them
+            await channel.declare_exchange(settings.exchanger, ExchangeType.DIRECT, durable=True)
             queue = await channel.declare_queue(settings.queue_name_to_first_service, durable=True)
-            print(f"[DEBUG] Queue declared: {queue.name}")
-
-            await queue.bind(exchange, routing_key=settings.routing_key_to_first_service)
-            print(f"[DEBUG] Queue bound to exchange with routing key '{settings.routing_key_to_first_service}'")
-
-            print("[service1] Waiting for messages...")
+            await queue.bind(settings.exchanger, routing_key=settings.routing_key_to_first_service)
+            # Consume messages continuously
             async with queue.iterator() as queue_iter:
                 async for message in queue_iter:
                     await publish_to_queue(message)
-
         except AMQPConnectionError as e:
-            print(f"[ERROR] AMQP Connection Error (service1): {e}")
+            print(f"[ERROR] AMQP Connection Error in service1: {e}")
             await asyncio.sleep(2)
         except Exception as e:
             print(f"[ERROR] Unexpected exception in service1: {e}")
             await asyncio.sleep(2)
-
 
 if __name__ == "__main__":
     asyncio.run(start())

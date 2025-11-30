@@ -1,8 +1,12 @@
+import os
 import asyncio
 from aio_pika import connect_robust, Message
 
+
 async def main():
-    conn = await connect_robust("amqp://guest:guest@template_rabbitmq:5672/")
+    host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+    port = int(os.getenv("RABBITMQ_PORT", "5672"))
+    conn = await connect_robust(f"amqp://guest:guest@{host}:{port}/")
     channel = await conn.channel()
 
     # Notifica utente (service1)
