@@ -30,10 +30,16 @@ def callback(ch, method, properties, body):
     headers = (properties.headers or {}) if properties else {}
     ctx = propagate.extract(headers)
     with tracer.start_as_current_span("service1_process", context=ctx) as span:
+        # (RECEIVE event)
+        span.set_attribute("event_kind", "RECEIVE")
+        span.set_attribute("service", "service1")
+        span.set_attribute("meta", "queue:service1")
+        
         span.set_attribute("messaging.system", "rabbitmq")
         span.set_attribute("messaging.destination_kind", "queue")
         span.set_attribute("messaging.destination", "service1")
         span.set_attribute("messaging.operation", "process")
+        
         # Processamento del messaggio
         data = json.loads(body.decode("utf-8"))
         print(f"service1 received: {data}")
