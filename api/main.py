@@ -1,78 +1,79 @@
-from opentelemetry import trace
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+import json
+import os
+import time
+
+import pika
+from fastapi import FastAPI, HTTPException
+from opentelemetry import propagate, trace
+from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.instrumentation.pika import PikaInstrumentor
-from opentelemetry.propagate import set_global_textmap
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from pika.exceptions import AMQPConnectionError
 
-from functools import lru_cache
-from typing import Annotated
-
-from broker import a_publish_to_rabbitmq, publish_to_rabbitmq
-from config import Settings
-from fastapi import Depends, FastAPI
-
-# Setup OpenTelemetry tracing (TracerProvider with service name) and Jaeger exporter
-trace.set_tracer_provider(
-    TracerProvider(
-        resource=Resource.create({SERVICE_NAME: "api"})
-    )
-)
+# Inizializza TracerProvider con il nome del servizio "api"
+resource = Resource.create({SERVICE_NAME: "api"})
+provider = TracerProvider(resource=resource)
 jaeger_exporter = JaegerExporter(
-    agent_host_name="jaeger",
+    agent_host_name="jaeger",  # nome del container Jaeger
     agent_port=6831,
 )
-trace.get_tracer_provider().add_span_processor(
-    BatchSpanProcessor(jaeger_exporter)
-)
-# Set global text map propagator to W3C Trace Context for context propagation
-set_global_textmap(TraceContextTextMapPropagator())
-# Instrument FastAPI and outgoing HTTP calls (requests)
-app = FastAPI(description="Microservice boilerplate 🚀")
-FastAPIInstrumentor.instrument_app(app)
-RequestsInstrumentor().instrument()
-# Instrument Pika (RabbitMQ client) for tracing message publishing
-PikaInstrumentor().instrument()
-
-settings = Settings()
+provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
+trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
-@lru_cache
-def get_settings():
-    return Settings()
+app = FastAPI()
 
-@app.post("/api/user/subscribe")
-def subscribe_user(data: dict, settings: Annotated[Settings, Depends(get_settings)]):
-    # Publish message to first service's queue (tracing via Pika instrumentation)
-    publish_to_rabbitmq(
-        queue_name=settings.queue_name_to_first_service,
-        exchanger=settings.exchanger,
-        routing_key=settings.routing_key_to_first_service,
-        data=data
-    )
-    return {"detail": "User subscribed."}
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
-@app.get("/test-trace")
-def test_trace():
-    # Example manual span to test tracing
-    with tracer.start_as_current_span("test-span"):
-        return {"message": "Tracing OK"}
 
-@app.post("/api/order/checkout")
-async def order_checkout(data: dict, settings: Annotated[Settings, Depends(get_settings)]):
-    # Publish message to second service's queue (async) with tracing
-    await a_publish_to_rabbitmq(
-        queue_name=settings.queue_name_to_second_service,
-        exchanger=settings.exchanger,
-        routing_key=settings.routing_key_to_second_service,
-        data=data
-    )
-    return {"detail": "Order created."}
+def publish(queue_name: str, message: dict, span_name: str):
+    """Publish a message with simple retry so startup does not fail if broker is slow."""
+    with tracer.start_as_current_span(span_name):
+        headers = {}
+        propagate.inject(headers)
+        last_err = None
+        for _ in range(5):
+            try:
+                connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
+                )
+                channel = connection.channel()
+                channel.queue_declare(queue=queue_name, durable=True)
+                channel.basic_publish(
+                    exchange="",
+                    routing_key=queue_name,
+                    body=json.dumps(message).encode("utf-8"),
+                    properties=pika.BasicProperties(headers=headers),
+                )
+                connection.close()
+                return
+            except AMQPConnectionError as exc:
+                last_err = exc
+                time.sleep(2)
+        raise HTTPException(
+            status_code=503,
+            detail=f"RabbitMQ unavailable at {RABBITMQ_HOST}:{RABBITMQ_PORT}: {last_err}",
+        )
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+@app.get("/")
+async def root():
+    return {"message": "API service is running"}
+
+
+@app.post("/service1")
+async def call_service1(message: dict):
+    publish(queue_name="service1", message=message, span_name="publish_to_service1")
+    return {"status": "Message sent to service1"}
+
+
+@app.post("/service2")
+async def call_service2(message: dict):
+    publish(queue_name="service2", message=message, span_name="publish_to_service2")
+    return {"status": "Message sent to service2"}
+
+
+# Emit a startup span so the service registers in Jaeger even before handling traffic.
+with tracer.start_as_current_span("api.startup"):
+    pass

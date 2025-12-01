@@ -1,78 +1,61 @@
-from opentelemetry import trace
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+import json
+import os
+import time
+
+import pika
+from opentelemetry import propagate, trace
+from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.propagate import set_global_textmap
-from opentelemetry.trace import SpanKind
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from pika.exceptions import AMQPConnectionError
 
-import asyncio
-import aio_pika
-from aio_pika import ExchangeType
-from aio_pika.exceptions import AMQPConnectionError
-from aio_pika.abc import AbstractIncomingMessage
-import json
-
-from config import Settings
-
-# Tracing setup for service1
-trace.set_tracer_provider(
-    TracerProvider(
-        resource=Resource.create({SERVICE_NAME: "service1"})
-    )
-)
+# Inizializza TracerProvider con il nome del servizio "service1"
+resource = Resource.create({SERVICE_NAME: "service1"})
+provider = TracerProvider(resource=resource)
 jaeger_exporter = JaegerExporter(
     agent_host_name="jaeger",
     agent_port=6831,
 )
-trace.get_tracer_provider().add_span_processor(
-    BatchSpanProcessor(jaeger_exporter)
-)
-# Use W3C Trace Context propagator globally
-set_global_textmap(TraceContextTextMapPropagator())
-# Get a tracer for creating spans in this service
+provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
+trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
-settings = Settings()
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
-async def publish_to_queue(message: AbstractIncomingMessage):
-    """Process a single incoming RabbitMQ message (with tracing)."""
-    async with message.process():  # auto-acknowledge after processing
-        # Extract tracing headers from the message and continue the trace
-        headers = getattr(message, "headers", {}) or {}
-        context = TraceContextTextMapPropagator().extract(headers)
-        # Start a consumer span for this message processing
-        with tracer.start_as_current_span("process message", context=context, kind=SpanKind.CONSUMER) as span:
-            span.set_attribute("messaging.system", "rabbitmq")
-            span.set_attribute("messaging.destination", settings.queue_name_to_first_service)
-            span.set_attribute("messaging.rabbitmq.routing_key", message.routing_key)
-            data = json.loads(message.body.decode())
-            print(f"[service1] Received message: {data}")
 
-async def start():
-    print("[service1] Waiting for messages... (connecting to RabbitMQ)")
+def callback(ch, method, properties, body):
+    # Estrai contesto di trace dalle header (propagazione W3C)
+    headers = (properties.headers or {}) if properties else {}
+    ctx = propagate.extract(headers)
+    with tracer.start_as_current_span("service1_process", context=ctx):
+        # Processamento del messaggio
+        data = json.loads(body.decode("utf-8"))
+        print(f"service1 received: {data}")
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+def main():
+    print("service1 waiting for messages...")
+    # Emit a startup span so the service registers in Jaeger
+    with tracer.start_as_current_span("service1.startup"):
+        pass
     while True:
         try:
-            # Connect to RabbitMQ (uses environment variables for host)
-            connection = await aio_pika.connect_robust(
-                f"amqp://guest:guest@{settings.rabbitmq_host}:{settings.rabbitmq_port}/"
+            connection = pika.BlockingConnection(
+                pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
             )
-            channel = await connection.channel()
-            # Declare exchange and queue (idempotent) and bind them
-            await channel.declare_exchange(settings.exchanger, ExchangeType.DIRECT, durable=True)
-            queue = await channel.declare_queue(settings.queue_name_to_first_service, durable=True)
-            await queue.bind(settings.exchanger, routing_key=settings.routing_key_to_first_service)
-            # Consume messages continuously
-            async with queue.iterator() as queue_iter:
-                async for message in queue_iter:
-                    await publish_to_queue(message)
-        except AMQPConnectionError as e:
-            print(f"[ERROR] AMQP Connection Error in service1: {e}")
-            await asyncio.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] Unexpected exception in service1: {e}")
-            await asyncio.sleep(2)
+            channel = connection.channel()
+            channel.queue_declare(queue="service1", durable=True)
+            channel.basic_consume(queue="service1", on_message_callback=callback, auto_ack=False)
+            channel.start_consuming()
+        except (AMQPConnectionError, OSError) as exc:
+            print(f"[service1] RabbitMQ unavailable ({exc}), retrying in 2s...")
+            time.sleep(2)
+        except KeyboardInterrupt:
+            break
+
 
 if __name__ == "__main__":
-    asyncio.run(start())
+    main()
