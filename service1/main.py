@@ -29,7 +29,11 @@ def callback(ch, method, properties, body):
     # Estrai contesto di trace dalle header (propagazione W3C)
     headers = (properties.headers or {}) if properties else {}
     ctx = propagate.extract(headers)
-    with tracer.start_as_current_span("service1_process", context=ctx):
+    with tracer.start_as_current_span("service1_process", context=ctx) as span:
+        span.set_attribute("messaging.system", "rabbitmq")
+        span.set_attribute("messaging.destination_kind", "queue")
+        span.set_attribute("messaging.destination", "service1")
+        span.set_attribute("messaging.operation", "process")
         # Processamento del messaggio
         data = json.loads(body.decode("utf-8"))
         print(f"service1 received: {data}")

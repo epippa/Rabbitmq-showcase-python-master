@@ -30,7 +30,11 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
 def publish(queue_name: str, message: dict, span_name: str):
     """Publish a message with simple retry so startup does not fail if broker is slow."""
-    with tracer.start_as_current_span(span_name):
+    with tracer.start_as_current_span(span_name) as span:
+        span.set_attribute("messaging.system", "rabbitmq")
+        span.set_attribute("messaging.destination_kind", "queue")
+        span.set_attribute("messaging.destination", queue_name)
+        span.set_attribute("messaging.operation", "publish")
         headers = {}
         propagate.inject(headers)
         last_err = None

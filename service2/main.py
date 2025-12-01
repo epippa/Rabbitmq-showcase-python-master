@@ -28,7 +28,11 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 def callback(ch, method, properties, body):
     headers = (properties.headers or {}) if properties else {}
     ctx = propagate.extract(headers)
-    with tracer.start_as_current_span("service2_process", context=ctx):
+    with tracer.start_as_current_span("service2_process", context=ctx) as span:
+        span.set_attribute("messaging.system", "rabbitmq")
+        span.set_attribute("messaging.destination_kind", "queue")
+        span.set_attribute("messaging.destination", "service2")
+        span.set_attribute("messaging.operation", "process")
         data = json.loads(body.decode("utf-8"))
         print(f"service2 received: {data}")
     ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -36,6 +40,9 @@ def callback(ch, method, properties, body):
 
 def main():
     print("service2 waiting for messages...")
+    # Emit a startup span so the service registers in Jaeger
+    with tracer.start_as_current_span("service2.startup"):
+        pass
     while True:
         try:
             connection = pika.BlockingConnection(

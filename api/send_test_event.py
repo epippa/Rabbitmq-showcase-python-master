@@ -12,13 +12,13 @@ async def main():
     # Notifica utente (service1)
     await channel.default_exchange.publish(
         Message(body=b'{"id": 1, "user_id": 2, "description": "notify-user"}'),
-        routing_key="notify_key"
+        routing_key="service1"
     )
 
     # Ordine checkout (service2)
     await channel.default_exchange.publish(
         Message(body=b'{"id": 99, "user_id": 5, "description": "order-checkout"}'),
-        routing_key="order_key"
+        routing_key="service2"
     )
 
     print("Messaggi inviati.")
