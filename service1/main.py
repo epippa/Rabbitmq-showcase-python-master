@@ -1,6 +1,4 @@
-import json
-import os
-import time
+import json, pika, os, time
 
 import pika
 from opentelemetry import propagate, trace
@@ -22,15 +20,54 @@ provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
 trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
+def forward_to_service2(payload: dict) -> None:
+    """Publish a message from service1 to the service2 queue, propagating the trace context."""
+    with tracer.start_as_current_span(
+        "service1_publish_to_service2",
+        kind=SpanKind.CLIENT,
+    ) as span:
+        # Tag per il TUO tool (CALL event)
+        span.set_attribute("event_kind", "CALL")
+        span.set_attribute("service", "service1")
+        span.set_attribute("meta", "queue:service2")
+        span.set_attribute("peer.service", "service2")
+
+        # Tag OTEL standard di messaging (facoltativi ma utili)
+        span.set_attribute("messaging.system", "rabbitmq")
+        span.set_attribute("messaging.destination_kind", "queue")
+        span.set_attribute("messaging.destination", "service2")
+        span.set_attribute("messaging.operation", "publish")
+
+        # Propagazione del contesto nel messaggio
+        headers: dict = {}
+        propagate.inject(headers)
+
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
+        )
+        channel = connection.channel()
+        channel.queue_declare(queue="service2", durable=True)
+        channel.basic_publish(
+            exchange="",
+            routing_key="service2",
+            body=json.dumps(payload).encode("utf-8"),
+            properties=pika.BasicProperties(headers=headers),
+        )
+        connection.close()
+
+
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
 
 def callback(ch, method, properties, body):
-    # Estrai contesto di trace dalle header (propagazione W3C)
     headers = (properties.headers or {}) if properties else {}
     ctx = propagate.extract(headers)
-    with tracer.start_as_current_span("service1_process", context=ctx, kind=SpanKind.SERVER) as span:
+    with tracer.start_as_current_span(
+        "service1_process",
+        context=ctx,
+        kind=SpanKind.SERVER,
+    ) as span:
         span.set_attribute("event_kind", "RECEIVE")
         span.set_attribute("service", "service1")
         span.set_attribute("meta", "queue:service1")
@@ -39,11 +76,12 @@ def callback(ch, method, properties, body):
         span.set_attribute("messaging.destination_kind", "queue")
         span.set_attribute("messaging.destination", "service1")
         span.set_attribute("messaging.operation", "process")
-        
-        # Processamento del messaggio
+
         data = json.loads(body.decode("utf-8"))
         print(f"service1 received: {data}")
+        forward_to_service2(data)
     ch.basic_ack(delivery_tag=method.delivery_tag)
+
 
 
 def main():
