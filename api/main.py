@@ -10,6 +10,7 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pika.exceptions import AMQPConnectionError
+from opentelemetry.trace import SpanKind
 
 # Inizializza TracerProvider con il nome del servizio "api"
 resource = Resource.create({SERVICE_NAME: "api"})
@@ -30,16 +31,12 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
 def publish(queue_name: str, message: dict, span_name: str):
     """Publish a message with simple retry so startup does not fail if broker is slow."""
-    with tracer.start_as_current_span(span_name) as span:
-        # (CALL event)
+    with tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT) as span:
         span.set_attribute("event_kind", "CALL")
-        # servizio sorgente (chi sta emettendo la CALL)
         span.set_attribute("service", "api")
-        # meta in stile Event-Driven Catalog: qui usiamo la coda
         span.set_attribute("meta", f"queue:{queue_name}")
-        # chi è il “callee” logico (service1 o service2)
         span.set_attribute("peer.service", queue_name)
-        
+
         span.set_attribute("messaging.system", "rabbitmq")
         span.set_attribute("messaging.destination_kind", "queue")
         span.set_attribute("messaging.destination", queue_name)

@@ -9,6 +9,7 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pika.exceptions import AMQPConnectionError
+from opentelemetry.trace import SpanKind
 
 # Inizializza TracerProvider con il nome del servizio "service2"
 resource = Resource.create({SERVICE_NAME: "service2"})
@@ -28,12 +29,11 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 def callback(ch, method, properties, body):
     headers = (properties.headers or {}) if properties else {}
     ctx = propagate.extract(headers)
-    with tracer.start_as_current_span("service2_process", context=ctx) as span:
-        # (RECEIVE event)
+    with tracer.start_as_current_span("service2_process", context=ctx, kind=SpanKind.SERVER) as span:
         span.set_attribute("event_kind", "RECEIVE")
         span.set_attribute("service", "service2")
         span.set_attribute("meta", "queue:service2")
-        
+
         span.set_attribute("messaging.system", "rabbitmq")
         span.set_attribute("messaging.destination_kind", "queue")
         span.set_attribute("messaging.destination", "service2")
