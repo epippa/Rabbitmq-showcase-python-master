@@ -1,6 +1,5 @@
-import json, pika, os, time
+import json, pika, os, time, requests
 
-import pika
 from opentelemetry import propagate, trace
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
@@ -54,11 +53,40 @@ def forward_to_service2(payload: dict) -> None:
             properties=pika.BasicProperties(headers=headers),
         )
         connection.close()
+        
+def suspicious_get_back_to_api() -> None:
+    """
+    Deliberate ECST violation:
+    after consuming an event from RabbitMQ, service1 performs an HTTP GET
+    back to the event producer (api).
+    """
+    url = "http://api:8000/health"
 
+    with tracer.start_as_current_span(
+        "service1_suspicious_get_api",
+        kind=SpanKind.CLIENT,
+    ) as span:
+        # Tag per il TUO tool (CALL event + meta "http GET ...")
+        span.set_attribute("event_kind", "CALL")
+        span.set_attribute("service", "service1")
+        span.set_attribute("peer.service", "api")
+        span.set_attribute("meta", "http GET api /health")
+
+        # Tag OTEL standard HTTP (utili anche senza meta custom)
+        span.set_attribute("http.method", "GET")
+        span.set_attribute("http.url", url)
+        span.set_attribute("http.target", "/health")
+
+        try:
+            response = requests.get(url, timeout=2.0)
+            span.set_attribute("http.status_code", response.status_code)
+        except Exception as exc:
+            span.set_attribute("error", True)
+            span.set_attribute("exception.type", type(exc).__name__)
+            span.set_attribute("exception.message", str(exc))
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-
 
 def callback(ch, method, properties, body):
     headers = (properties.headers or {}) if properties else {}
@@ -79,8 +107,15 @@ def callback(ch, method, properties, body):
 
         data = json.loads(body.decode("utf-8"))
         print(f"service1 received: {data}")
+
+        # 1) Forward verso la coda di service2 (CALL via RabbitMQ)
         forward_to_service2(data)
+
+        # 2) Violazione ECST: GET HTTP indietro verso il producer (api)
+        suspicious_get_back_to_api()
+
     ch.basic_ack(delivery_tag=method.delivery_tag)
+
 
 
 

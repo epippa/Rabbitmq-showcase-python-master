@@ -1,6 +1,4 @@
-import json
-import os
-import time
+import json, os, time
 
 import pika
 from fastapi import FastAPI, HTTPException
@@ -84,6 +82,9 @@ async def call_service2(message: dict):
     publish(queue_name="service2", message=message, span_name="publish_to_service2")
     return {"status": "Message sent to service2"}
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 # Emit a startup span so the service registers in Jaeger even before handling traffic.
 with tracer.start_as_current_span("api.startup"):

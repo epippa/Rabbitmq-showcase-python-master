@@ -1,6 +1,4 @@
-import json
-import os
-import time
+import json, os, time
 
 import pika
 from opentelemetry import propagate, trace
