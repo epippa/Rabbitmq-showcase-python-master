@@ -105,6 +105,9 @@ def callback(ch, method, properties, body):
         span.set_attribute("messaging.destination", "service1")
         span.set_attribute("messaging.operation", "process")
 
+        span.set_attribute("messaging.rabbitmq.queue", "service1")
+
+
         data = json.loads(body.decode("utf-8"))
         print(f"service1 received: {data}")
 
